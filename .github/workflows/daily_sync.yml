@@ -1,0 +1,34 @@
+name: Daily Stock Data Sync
+
+on:
+  schedule:
+    # 每天凌晨 0 點執行 (UTC 時間)
+    - cron: '0 0 * * *'
+  workflow_dispatch: # 允許你點按鈕手動執行測試
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: pip install yfinance pandas
+
+      - name: Run fetch script
+        run: python fetch_stock.py
+
+      - and: 
+        name: Commit and Push changes
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          git add *.csv
+          git commit -m "Update stock data" || exit 0
+          git push
