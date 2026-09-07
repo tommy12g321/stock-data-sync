@@ -17,7 +17,7 @@ def fetch_tw_stock_data():
         for ticker in tickers:
             print(f"  --> Fetching {ticker}...")
             # 為了穩定性，使用 5 天內、5 分鐘間隔的數據
-            data = yf.download(ticker, period="5d", interval="5m", progress=False)
+            data = yf.download(ticker, period="5y", interval="1d", progress=False)
             
             if data.empty:
                 print(f"  ⚠️ Warning: {ticker} failed.")
