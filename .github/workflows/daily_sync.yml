@@ -1,20 +1,22 @@
-name: Daily Stock Data Data Sync
+name: Daily Stock Data Sync
 
 on:
   schedule:
     # 每天凌晨 0 點執行 (UTC 時間)
     - cron: '0 0 * * *'
-  workflow_dispatch: # 允許你點按鈕手動執行測試
+  workflow_dispatch: # 允許你手動點按鈕測試
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 這是關鍵！給予工作流寫入權限
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.9'
 
@@ -25,9 +27,7 @@ jobs:
         run: python fetch_stock.py
 
       - name: Commit and Push changes
-        run: |
-          git config --global user.name "GitHub Action"
-          git config --global user.email "action@github.com"
-          git add *.csv
-          git commit -m "Update stock data" || exit 0
-          git push
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update stock data"
+          # 這個插件會自動幫你完成 git add, git commit, git push
