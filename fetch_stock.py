@@ -4,9 +4,7 @@ import datetime
 import os
 
 def fetch_tw_stock_data():
-    # 1. 設定台股代號 (台股一定要加 .TW)
-    # 範例：2330.TW (台積電), 2317.TW (聯發科), 2454.TW (聯發科), 2388.TW (廣達)
-    # 你可以隨時在這邊增加你想抓的股票
+    # 1. 設定台股代號 (記得要加 .TW)
     tickers = ["2330.TW", "2317.TW", "2454.TW", "2388.TW", "2354.TW"]
     
     file_name = "stock_data.csv"
@@ -21,7 +19,7 @@ def fetch_tw_stock_data():
         for ticker in tickers:
             print(f"  --> 正在抓取 {ticker}...")
             # 抓取最近 1 天的資料
-            data = ylib_data = yf.download(ticker, period="1d", interval="1m", progress=False)
+            data = ytd_data = yf.download(ticker, period="1d", interval="1m", progress=False)
             
             if data.empty:
                 print(f"  ⚠️ 警告: {ticker} 抓不到資料，跳過。")
@@ -44,12 +42,13 @@ def fetch_tw_stock_data():
         print(f"✅ 成功將資料寫入 {file_name}")
         print(f"📊 總共處理了 {len(final_df)} 筆數據列。")
 
-        # 4. 【重要】更新 Log 檔，強迫 Git 偵測到變動
-        # 如果沒有這行，Git 會覺得檔案沒變，就不會幫你 Commit，你也會看不到成果
-        with open(log_file, "w") as f:
-            f $\text{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}$
+        # 4. 【關鍵】更新 Log 檔，確保 Git 偵測到變動
+        # 這行絕對不會再有錯誤符號了
+        with open(log_file, "w", encoding="utf-8") as f:
+            now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            f.write(f"最後更新時間: {now_str}\n")
+            
         print(f"📝 更新了 {log_file}，這會觸發 Git Commit。")
-
         print("✨ 任務圓滿完成！")
 
     except Exception as e:
