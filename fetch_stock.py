@@ -1,5 +1,5 @@
 import yfinance as yf
-import pandas aspd
+import pandas as pd  # 已修正此處
 import datetime
 import os
 
@@ -16,7 +16,7 @@ def fetch_tw_stock_data():
 
         for ticker in tickers:
             print(f"  --> Fetching {ticker}...")
-            # Changed period to 5d and interval to 5m for stability
+            # 為了穩定性，使用 5 天內、5 分鐘間隔的數據
             data = yf.download(ticker, period="5d", interval="5m", progress=False)
             
             if data.empty:
