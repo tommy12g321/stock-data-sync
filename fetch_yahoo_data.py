@@ -24,7 +24,13 @@ def fetch_stock_data(symbol, days=30):
         # Create filename with date
         date_str = datetime.now().strftime("%Y%m%d")
         filename = f"{symbol.replace('.', '_')}_{date_str}.csv"
-        filepath = os.path.join("/home/tommy/stock-data-sync/data", filename)
+        
+        # Use relative path to ensure compatibility between local and GitHub Actions
+        base_dir = os.path.join(os.getcwd(), "data")
+        if not os.path.exists(base_dir):
+            os.makedirs(base_dir)
+            
+        filepath = os.path.join(base_dir, filename)
         
         df.to_csv(filepath, index=False)
         print(f"成功！資料已儲存至: {filepath}")
