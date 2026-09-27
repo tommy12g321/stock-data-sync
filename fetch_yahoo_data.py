@@ -51,13 +51,36 @@ def fetch_with_retry(symbol, start, end, retries=3):
     return None
 
 
+def _to_date_str(val):
+    """Map any date-like value (naive/tz-aware Timestamp, or legacy
+    'YYYY-MM-DD HH:MM:SS+08:00' string) to a plain 'YYYY-MM-DD' string,
+    keeping the value's own calendar date (the TW trading date as displayed)."""
+    try:
+        return pd.Timestamp(val).strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _norm_date(s):
+    """Normalize a date column to plain 'YYYY-MM-DD' strings so legacy and new
+    formats can be concatenated/deduped/sorted together (ISO strings sort
+    chronologically)."""
+    return s.map(_to_date_str)
+
+
 def merge_history(filepath, new_df):
     """Append new rows to existing CSV, dedupe by date, keep latest values."""
     if not os.path.exists(filepath):
         return new_df
     old = pd.read_csv(filepath)
     common = [c for c in new_df.columns if c in old.columns]
-    merged = pd.concat([old[common], new_df[common]], ignore_index=True)
+    old, new = old[common], new_df[common]
+    if "date" in old.columns:
+        old["date"] = _norm_date(old["date"])
+    if "date" in new.columns:
+        new["date"] = _norm_date(new["date"])
+    merged = pd.concat([old, new], ignore_index=True)
+    merged = merged.dropna(subset=["date"])
     return merged.drop_duplicates(subset=["date"], keep="last").sort_values("date").reset_index(drop=True)
 
 
@@ -66,13 +89,15 @@ def pick_start(filepath):
     start = datetime.strptime(START_DATE, "%Y-%m-%d")
     if os.path.exists(filepath):
         try:
-            old = pd.read_csv(filepath, parse_dates=["date"])
-            if not old.empty:
-                min_d, max_d = old["date"].min(), old["date"].max()
-                if min_d > start + PARTIAL_EPS:
-                    print(f"  歷史不完整(min={min_d.date()}),從 {START_DATE} 重新回填")
-                    return start.strftime("%Y-%m-%d")
-                return max((max_d - TAIL_BUFFER).date(), start.date()).strftime("%Y-%m-%d")
+            old = pd.read_csv(filepath)
+            if not old.empty and "date" in old.columns:
+                d = pd.to_datetime(_norm_date(old["date"]), errors="coerce").dropna()
+                if not d.empty:
+                    min_d, max_d = d.min(), d.max()
+                    if min_d > start + PARTIAL_EPS:
+                        print(f"  歷史不完整(min={min_d.date()}),從 {START_DATE} 重新回填")
+                        return start.strftime("%Y-%m-%d")
+                    return max((max_d - TAIL_BUFFER).date(), start.date()).strftime("%Y-%m-%d")
         except Exception:
             pass
     return start.strftime("%Y-%m-%d")
@@ -92,9 +117,11 @@ def fetch_stock_data(symbol):
     os.makedirs(DATA_DIR, exist_ok=True)
 
     df = df[[c for c in KEEP_COLS if c in df.columns]]
+    if "date" in df.columns:
+        df["date"] = _norm_date(df["date"])   # 統一為 YYYY-MM-DD 字串(含新建檔路徑)
     df = merge_history(filepath, df)
     df.to_csv(filepath, index=False)
-    print(f"  OK: {len(df)} 筆 ({df['date'].iloc[0].date()}~{df['date'].iloc[-1].date()}) -> {os.path.basename(filepath)}")
+    print(f"  OK: {len(df)} 筆 ({df['date'].iloc[0]}~{df['date'].iloc[-1]}) -> {os.path.basename(filepath)}")
     return True
 
 
