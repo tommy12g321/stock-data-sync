@@ -2,7 +2,7 @@ name: Daily Stock Sync
 
 on:
   schedule:
-    - cron: '0 8 * * *' # Runs every day at 8:00 UTC (approx 4 PM Taiwan time after market close)
+    - cron: '30 17 * * *' # 01:30 台灣時間(收盤翌日凌晨,數據定案;落在快網時段內)
   push:
     branches: [ main ]
   workflow_dispatch:   # Allows manual trigger from GitHub UI
@@ -10,6 +10,7 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     permissions:
       contents: write
     steps:
@@ -24,7 +25,10 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install yfinance pandas
+        pip install yfinance pandas twstock
+
+    - name: Refresh full symbol list (上市+上櫃+特別股+創新板)
+      run: python build_symbols.py
 
     - name: Run fetch script
       run: python fetch_yahoo_data.py
@@ -33,6 +37,6 @@ jobs:
       run: |
         git config --local user.email "actions@github.com"
         git config --local user.name "GitHub Action"
-        git add data/*.csv || echo "No CSV files found to add"
+        git add data/*.csv symbols.txt || echo "Nothing to add"
         git commit -m "Auto-sync stock data: $(date +'%Y-%m-%d')" || echo "No changes to commit"
         git push

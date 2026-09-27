@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Fetch Yahoo Finance OHLCV data and store one stable CSV per stock.
+"""Fetch Yahoo Finance daily OHLCV for the full TW stock list (symbols.txt).
 
-- Symbol list: symbols.txt (one per line, # = comment), fallback to DEFAULT_SYMBOLS
-- Output: data/<SYMBOL>.csv (e.g. data/2330_TW.csv) — same file updated daily,
-  new rows merged into existing history (no per-day file proliferation)
-- Retries with backoff for transient network / rate-limit errors
+- One stable CSV per stock: data/<CODE>_TW.csv (e.g. data/2330_TW.csv)
+- Raw (unadjusted) prices as displayed on the day; columns: date,open,high,low,close,volume
+- Backfill from START_DATE (2020-01-01); afterwards only the missing tail is fetched:
+    start = last_date - 3d buffer, UNLESS the file's min_date is after START_DATE+14d
+    (i.e. history is still partial — a mid-backfill file or pre-IPO IPO'd later —
+    then refetch from START_DATE; dedupe keeps the merge correct either way).
+- Retries with backoff per symbol; partial failures are OK (next run refetches
+  whatever is stale), all-failures fail the run.
 """
 import argparse
 import os
+import random
 import sys
 import time
 from datetime import datetime, timedelta
@@ -17,7 +22,11 @@ import yfinance as yf
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
-DEFAULT_SYMBOLS = ["2330.TW", "2317.TW", "2454.TW"]
+START_DATE = "2020-01-01"          # 資料庫起算日
+PARTIAL_EPS = timedelta(days=14)   # min_date 比 START_DATE 晚超過這值 → 視為未回填完
+TAIL_BUFFER = timedelta(days=3)    # 增量重疊緩衝(去重會處理)
+SLEEP_RANGE = (0.3, 1.3)         # 每檔間隔(秒,隨機)——避免定時節奏被 Yahoo 辨識/限流
+KEEP_COLS = ["date", "open", "high", "low", "close", "volume"]
 
 
 def load_symbols(path):
@@ -26,13 +35,13 @@ def load_symbols(path):
             syms = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
         if syms:
             return syms
-    return DEFAULT_SYMBOLS
+    return []
 
 
 def fetch_with_retry(symbol, start, end, retries=3):
     for attempt in range(1, retries + 1):
         try:
-            df = yf.Ticker(symbol).history(start=start, end=end)
+            df = yf.Ticker(symbol).history(start=start, end=end, interval="1d", auto_adjust=False)
             if df is not None and not df.empty:
                 return df
         except Exception as e:
@@ -52,11 +61,27 @@ def merge_history(filepath, new_df):
     return merged.drop_duplicates(subset=["date"], keep="last").sort_values("date").reset_index(drop=True)
 
 
-def fetch_stock_data(symbol, days=30):
-    start = datetime.now() - timedelta(days=days)
-    end = datetime.now()
-    print(f"正在抓取 {symbol} (最近 {days} 天)...")
+def pick_start(filepath):
+    """Backfill-from-2020 until the file covers the full range, then incremental tail."""
+    start = datetime.strptime(START_DATE, "%Y-%m-%d")
+    if os.path.exists(filepath):
+        try:
+            old = pd.read_csv(filepath, parse_dates=["date"])
+            if not old.empty:
+                min_d, max_d = old["date"].min(), old["date"].max()
+                if min_d > start + PARTIAL_EPS:
+                    print(f"  歷史不完整(min={min_d.date()}),從 {START_DATE} 重新回填")
+                    return start.strftime("%Y-%m-%d")
+                return max((max_d - TAIL_BUFFER).date(), start.date()).strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    return start.strftime("%Y-%m-%d")
 
+
+def fetch_stock_data(symbol):
+    filepath = os.path.join(DATA_DIR, f"{symbol.replace('.', '_')}.csv")
+    start = pick_start(filepath)
+    end = datetime.now().strftime("%Y-%m-%d")
     df = fetch_with_retry(symbol, start, end)
     if df is None:
         print(f"  失敗: {symbol} 無資料")
@@ -64,30 +89,39 @@ def fetch_stock_data(symbol, days=30):
 
     df = df.reset_index()
     df.columns = [c.replace(" ", "_").lower() for c in df.columns]
-
-    # Stable filename per stock (2330_TW.csv) — true sync semantics
-    filepath = os.path.join(DATA_DIR, f"{symbol.replace('.', '_')}.csv")
     os.makedirs(DATA_DIR, exist_ok=True)
 
+    df = df[[c for c in KEEP_COLS if c in df.columns]]
     df = merge_history(filepath, df)
     df.to_csv(filepath, index=False)
-    print(f"  OK: {len(df)} 筆 -> {filepath}")
+    print(f"  OK: {len(df)} 筆 ({df['date'].iloc[0].date()}~{df['date'].iloc[-1].date()}) -> {os.path.basename(filepath)}")
     return True
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Fetch Yahoo Finance data for TW stocks")
-    ap.add_argument("--days", type=int, default=30, help="回看天數 (預設 30)")
+    ap = argparse.ArgumentParser(description="Fetch Yahoo Finance daily OHLCV for the TW stock list")
     ap.add_argument("--symbols", default=os.path.join(BASE_DIR, "symbols.txt"), help="股票清單檔")
+    ap.add_argument("--limit", type=int, default=0, help="只抓前 N 檔(0=全部),測試用")
     args = ap.parse_args()
 
     symbols = load_symbols(args.symbols)
-    print(f"共 {len(symbols)} 檔股票: {', '.join(symbols)}")
+    if args.limit:
+        symbols = symbols[: args.limit]
+    print(f"共 {len(symbols)} 檔股票,起算日 {START_DATE}")
 
-    ok = [s for s in symbols if fetch_stock_data(s, args.days)]
-    print(f"完成: {len(ok)}/{len(symbols)} 成功")
-    if not ok:
-        sys.exit(1)  # fail the run (and the Action) when everything failed
+    ok = fail = 0
+    for i, s in enumerate(symbols, 1):
+        if fetch_stock_data(s):
+            ok += 1
+        else:
+            fail += 1
+        if i % 100 == 0:
+            print(f"進度 {i}/{len(symbols)} (成功 {ok} / 失敗 {fail})")
+        time.sleep(random.uniform(*SLEEP_RANGE))
+
+    print(f"完成: 成功 {ok}/{len(symbols)},失敗 {fail}")
+    if ok == 0:
+        sys.exit(1)  # 全失敗才讓 Action 紅(部分失敗明天重抓)
 
 
 if __name__ == "__main__":
