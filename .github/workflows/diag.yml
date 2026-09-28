@@ -1,0 +1,34 @@
+name: Yahoo Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [diag]
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Direct Yahoo chart API (bypasses yfinance)
+      run: |
+        set -e
+        UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+        test_sym() {
+          local s="$1"
+          local body
+          body=$(curl -s --max-time 20 -A "$UA" \
+            "https://query1.finance.yahoo.com/v8/finance/chart/${s}?range=5d&interval=1d" 2>&1) || body="(curl fail)"
+          if echo "$body" | grep -q '"timestamp"'; then
+            n=$(echo "$body" | python3 -c "import sys,json;print(len(json.load(sys.stdin)['chart']['result'][0]['timestamp']))" 2>/dev/null || echo "?")
+            echo "RESULT ${s} -> HAS DATA (${n} days)"
+          else
+            echo "RESULT ${s} -> NO DATA :: $(echo "$body" | head -c 160)"
+          fi
+        }
+        echo "=== direct chart API ==="
+        for s in 2330.TW 3071.TW 3064.TW 3083.TW 3090.TW 1240.TW; do test_sym "$s"; done
+        echo
+        echo "=== retry the failures after 30s (test if block lifts) ==="
+        sleep 30
+        for s in 3071.TW 3064.TW 3083.TW; do test_sym "$s"; done
