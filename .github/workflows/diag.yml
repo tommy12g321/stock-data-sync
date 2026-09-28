@@ -10,25 +10,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-    - name: Direct Yahoo chart API (bypasses yfinance)
+    - name: Reachability of official TW sources from Actions
       run: |
-        set -e
         UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
-        test_sym() {
-          local s="$1"
-          local body
-          body=$(curl -s --max-time 20 -A "$UA" \
-            "https://query1.finance.yahoo.com/v8/finance/chart/${s}?range=5d&interval=1d" 2>&1) || body="(curl fail)"
-          if echo "$body" | grep -q '"timestamp"'; then
-            n=$(echo "$body" | python3 -c "import sys,json;print(len(json.load(sys.stdin)['chart']['result'][0]['timestamp']))" 2>/dev/null || echo "?")
-            echo "RESULT ${s} -> HAS DATA (${n} days)"
-          else
-            echo "RESULT ${s} -> NO DATA :: $(echo "$body" | head -c 160)"
-          fi
+        probe() {
+          local label="$1" url="$2"
+          local code body
+          body=$(curl -s --max-time 25 -A "$UA" -D /tmp/h -o /tmp/b -w "%{http_code}" "$url" 2>&1)
+          code=$(echo "$body" | tail -1)
+          local size=$(wc -c < /tmp/b 2>/dev/null || echo 0)
+          local snippet=$(head -c 150 /tmp/b 2>/dev/null | tr '\n' ' ')
+          echo "PROBE ${label} -> HTTP ${code} (${size}b) :: ${snippet}"
         }
-        echo "=== direct chart API ==="
-        for s in 2330.TW 3071.TW 3064.TW 3083.TW 3090.TW 1240.TW; do test_sym "$s"; done
-        echo
-        echo "=== retry the failures after 30s (test if block lifts) ==="
-        sleep 30
-        for s in 3071.TW 3064.TW 3083.TW; do test_sym "$s"; done
+        echo "=== TWSE (listed official) ==="
+        probe "TWSE 2330 daily"  "https://www.twse.com.tw/exchangeView/STOCK_DAY?stockCode=2330&date=2026092400"
+        probe "TWSE 3071 daily"  "https://www.twse.com.tw/exchangeView/STOCK_DAY?stockCode=3071&date=2026092400"
+        echo "=== TPEx (OTC official) ==="
+        probe "TPEx home"        "https://www.tpexweb.com.tw/"
+        probe "TPEx 1240 quote"  "https://www.tpexweb.com.tw/StockQuote/StockQuote.aspx?StockId="
+        echo "=== control: Yahoo (expect 429) ==="
+        probe "Yahoo 2330"       "https://query1.finance.yahoo.com/v8/finance/chart/2330.TW?range=5d&interval=1d"
