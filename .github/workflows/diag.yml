@@ -14,24 +14,43 @@ jobs:
       with:
         python-version: '3.12'
     - run: pip install twstock requests
-    - name: Probe official TWSE/TPEx historical fetchers (range + reachability)
+    - name: Retry behavior + full-history endpoint test
       run: |
         python - <<'PY'
-        import warnings; warnings.filterwarnings("ignore")
+        import time, warnings; warnings.filterwarnings("ignore")
+        import requests
         from twstock.stock import TWSEFetcher, TPEXFetcher
-        def show(label, data):
-            rows = data.get("data", [])
-            if rows:
-                print(f"{label} -> {len(rows)} rows | {rows[0].date.date()} .. {rows[-1].date.date()} | close_last={rows[-1].close}")
-            else:
-                print(f"{label} -> 0 rows (empty/blocked?)")
+        UA = {"User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
+
+        print("=== A) retry 3071 (TWSE) & 1101 (TPEx) with 3s delay ===")
         t = TWSEFetcher(); p = TPEXFetcher()
-        print("=== TWSE (listed) ===")
-        show("TWSE 2330 d=202001", t.fetch(2020,1,"2330"))
-        show("TWSE 2330 d=202609", t.fetch(2026,9,"2330"))
-        show("TWSE 3071 d=202609 (was 404 on Yahoo)", t.fetch(2026,9,"3071"))
-        print("=== TPEx (OTC) ===")
-        show("TPEx 1240 d=202001", p.fetch(2020,1,"1240"))
-        show("TPEx 1240 d=202609", p.fetch(2026,9,"1240"))
-        show("TPEx 1101 d=202609", p.fetch(2026,9,"1101"))
+        for i in range(4):
+            d = t.fetch(2026,9,"3071"); r = len(d.get("data",[]))
+            print(f"  3071 try{i+1}: {r} rows")
+            if r: break
+            time.sleep(3)
+        for i in range(4):
+            d = p.fetch(2026,9,"1101"); r = len(d.get("data",[]))
+            print(f"  1101 try{i+1}: {r} rows")
+            if r: break
+            time.sleep(3)
+
+        print("=== B) full-history-per-request? (raw requests, inspect JSON) ===")
+        def probe(label, url, params):
+            try:
+                r = requests.get(url, params=params, headers=UA, timeout=25)
+                try:
+                    j = r.json()
+                    data = j.get("data") if isinstance(j,dict) else None
+                    n = len(data) if isinstance(data,list) else ("tables" in str(j)[:50])
+                    print(f"  {label} -> HTTP {r.status_code} | json.data rows={n}")
+                except Exception:
+                    print(f"  {label} -> HTTP {r.status_code} | non-JSON, {len(r.text)}b :: {r.text[:80]!r}")
+            except Exception as e:
+                print(f"  {label} -> EXC {e}")
+        probe("TWSE exchangeView no-date", "https://www.twse.com.tw/exchangeView/STOCK_DAY", {"stockCode":"2330"})
+        time.sleep(2)
+        probe("TWSE exchangeView range 2020-2026", "https://www.twse.com.tw/exchangeView/STOCK_DAY", {"stockCode":"2330","start_date":"20200101","end_date":"20260924"})
+        time.sleep(2)
+        probe("TWSE exchangeReport 202001 (baseline)", "https://www.twse.com.tw/exchangeReport/STOCK_DAY", {"date":"20200101","stockNo":"2330"})
         PY
