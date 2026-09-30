@@ -103,9 +103,11 @@ def pick_start(filepath):
     return start.strftime("%Y-%m-%d")
 
 
-def fetch_stock_data(symbol):
-    filepath = os.path.join(DATA_DIR, f"{symbol.replace('.', '_')}.csv")
-    start = pick_start(filepath)
+def fetch_stock_data(symbol, data_dir, outdir):
+    name = symbol.replace(".", "_") + ".csv"
+    existing = os.path.join(data_dir, name)      # 既有歷史(合併基準)
+    outpath = os.path.join(outdir, name)         # 輸出
+    start = pick_start(existing)
     end = datetime.now().strftime("%Y-%m-%d")
     df = fetch_with_retry(symbol, start, end)
     if df is None:
@@ -114,14 +116,14 @@ def fetch_stock_data(symbol):
 
     df = df.reset_index()
     df.columns = [c.replace(" ", "_").lower() for c in df.columns]
-    os.makedirs(DATA_DIR, exist_ok=True)
 
     df = df[[c for c in KEEP_COLS if c in df.columns]]
     if "date" in df.columns:
         df["date"] = _norm_date(df["date"])   # 統一為 YYYY-MM-DD 字串(含新建檔路徑)
-    df = merge_history(filepath, df)
-    df.to_csv(filepath, index=False)
-    print(f"  OK: {len(df)} 筆 ({df['date'].iloc[0]}~{df['date'].iloc[-1]}) -> {os.path.basename(filepath)}")
+    df = merge_history(existing, df)
+    os.makedirs(outdir, exist_ok=True)
+    df.to_csv(outpath, index=False)
+    print(f"  OK: {len(df)} 筆 ({df['date'].iloc[0]}~{df['date'].iloc[-1]}) -> {os.path.basename(outpath)}")
     return True
 
 
@@ -129,16 +131,24 @@ def main():
     ap = argparse.ArgumentParser(description="Fetch Yahoo Finance daily OHLCV for the TW stock list")
     ap.add_argument("--symbols", default=os.path.join(BASE_DIR, "symbols.txt"), help="股票清單檔")
     ap.add_argument("--limit", type=int, default=0, help="只抓前 N 檔(0=全部),測試用")
+    ap.add_argument("--data", default=os.path.join(BASE_DIR, "data"), help="既有資料目錄(合併基準)")
+    ap.add_argument("--outdir", default=os.path.join(BASE_DIR, "data"), help="輸出目錄")
+    ap.add_argument("--twse", action="store_true", help="只抓上市(TWSE)股;上櫃(TPEx)由 fetch_tpex_data.py 負責")
     args = ap.parse_args()
 
     symbols = load_symbols(args.symbols)
+    if args.twse:
+        import twstock
+        symbols = [s for s in symbols
+                   if twstock.codes.get(s[:-3]) is not None
+                   and twstock.codes[s[:-3]].data_source == "twse"]
     if args.limit:
         symbols = symbols[: args.limit]
-    print(f"共 {len(symbols)} 檔股票,起算日 {START_DATE}")
+    print(f"共 {len(symbols)} 檔股票,起算日 {START_DATE}" + ("(僅上市 TWSE)" if args.twse else ""))
 
     ok = fail = 0
     for i, s in enumerate(symbols, 1):
-        if fetch_stock_data(s):
+        if fetch_stock_data(s, args.data, args.outdir):
             ok += 1
         else:
             fail += 1
