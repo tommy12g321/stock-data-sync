@@ -26,9 +26,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 START_DATE = "2020-01-01"          # 資料庫起算日(與 Yahoo 抓取一致)
 PARTIAL_EPS_DAYS = 14              # min_date 比起算日晚超過此值 → 視為未回填完
 TAIL_DAYS = 45                     # 增量時回補的尾巴長度(日)
-MONTH_SLEEP_RANGE = (0.15, 0.4)    # 每月請求間隔(秒)——禮貌性節流
-STOCK_SLEEP_RANGE = (0.3, 0.9)     # 每檔間隔(秒)
-MONTH_RETRIES = 2                  # 單月重試次數(僅防暫現失敗;空月通常=IPO前,不必重試)
+MONTH_SLEEP_RANGE = (0.25, 0.6)    # 每月請求間隔(秒)——禮貌性節流,拖長 TPEx 的限流窗口
+STOCK_SLEEP_RANGE = (0.5, 1.2)     # 每檔間隔(秒)
+MONTH_RETRIES = 4                  # 單月重試次數(含連線被重置時的退避重試)
 KEEP_COLS = ["date", "open", "high", "low", "close", "volume"]
 
 _TPEX = TPEXFetcher()
@@ -47,13 +47,22 @@ def month_range(start_dt, end_dt):
 
 
 def fetch_month(year, month, code):
-    """Fetch one month for a stock; retry transient empties. Returns row list."""
+    """Fetch one month for a stock.
+
+    Retry transient failures — both empty responses and connection resets
+    (TPEx drops the connection after ~a thousand rapid requests per IP).
+    Exponential backoff lets the rate-limit window lapse before retrying.
+    Returns the row list (may be empty for pre-IPO months).
+    """
     for attempt in range(1, MONTH_RETRIES + 1):
-        data = _TPEX.fetch(year, month, code).get("data", [])
-        if data:
-            return data
+        try:
+            data = _TPEX.fetch(year, month, code).get("data", [])
+            if data:
+                return data
+        except Exception:
+            data = []  # ConnectionError / RemoteDisconnected / rate-limit
         if attempt < MONTH_RETRIES:
-            time.sleep(1.5 * attempt)  # 退避
+            time.sleep(5 * (2 ** (attempt - 1)))  # 5, 10, 20, 40s 退避
     return []
 
 
@@ -80,13 +89,13 @@ def fetch_stock(sym, existing_path, outdir):
     start = plan_start(existing_path, start)
     now = datetime.now()
 
-    # 由最近月份往前抓;遇到(重試後仍)空月即視為 IPO 前,停止——省掉大量 IPO 前請求
+    # 從起算月逐月往前(依序)抓;空月(多為 IPO 前)直接略過,不中斷——
+    # 因為連線被重置的月重試後也可能變空,不能拿它當「IPO 前」的依據。
     rows = []
-    for (y, m) in reversed(month_range(start, now)):
+    for (y, m) in month_range(start, now):
         data = fetch_month(y, m, code)
-        if not data:
-            break
-        rows.extend(data)
+        if data:
+            rows.extend(data)
         time.sleep(random.uniform(*MONTH_SLEEP_RANGE))
 
     if not rows:
