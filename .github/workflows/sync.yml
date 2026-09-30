@@ -84,7 +84,7 @@ jobs:
   commit:
     needs: [listed, otc]
     # 部分 chunk 失敗不能擋住提交:只要沒被 cancel,就 commit 所有已抓到的(成功 chunk 的 artifact 仍在)
-    if: !cancelled()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
