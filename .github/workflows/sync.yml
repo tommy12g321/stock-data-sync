@@ -2,41 +2,111 @@ name: Daily Stock Sync
 
 on:
   schedule:
-    - cron: '30 17 * * *' # 01:30 台灣時間(收盤翌日凌晨,數據定案;落在快網時段內)
+    - cron: '30 17 * * *' # 01:30 台灣時間(收盤翌日凌晨,數據定案)
   push:
     branches: [ main ]
-  workflow_dispatch:   # Allows manual trigger from GitHub UI
+  workflow_dispatch:   # manual trigger from GitHub UI
+
+# 避免重疊 run 搶著 push
+concurrency:
+  group: stock-sync
+  cancel-in-progress: false
 
 jobs:
-  sync:
+  prep:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 15
+    outputs:
+      otc: ${{ steps.otc.outputs.otc }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - run: pip install twstock
+    - name: Refresh symbol list + split OTC into chunks
+      id: otc
+      run: |
+        python build_symbols.py
+        python make_otc_chunks.py --n 12 > otc_chunks.json
+        echo "otc=$(cat otc_chunks.json)" >> "$GITHUB_OUTPUT"
+
+  listed:
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - run: |
+        pip install --upgrade pip
+        pip install yfinance pandas twstock
+    - name: Fetch listed (TWSE) stocks via Yahoo
+      run: |
+        python build_symbols.py
+        python fetch_yahoo_data.py --twse --data data --outdir out
+    - name: Upload listed CSVs
+      uses: actions/upload-artifact@v4
+      with:
+        name: listed
+        path: out
+        if-no-files-found: ignore
+
+  otc:
+    needs: prep
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: ${{ fromJson(needs.prep.outputs.otc) }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - run: |
+        pip install --upgrade pip
+        pip install pandas requests twstock
+    - name: Fetch OTC (TPEx) chunk ${{ matrix.idx }} from official source
+      run: |
+        python build_symbols.py
+        python fetch_tpex_data.py --symbols "${{ matrix.chunk }}" --data data --outdir out
+    - name: Upload OTC chunk CSVs
+      uses: actions/upload-artifact@v4
+      with:
+        name: otc-${{ matrix.idx }}
+        path: out
+        if-no-files-found: ignore
+
+  commit:
+    needs: [listed, otc]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - uses: actions/checkout@v4
+    - name: Download all fetched CSVs
+      uses: actions/download-artifact@v4
       with:
-        python-version: '3.12'
-
-    - name: Install dependencies
+        pattern: 'listed|otc-*'
+        path: stage
+    - name: Assemble data/ and commit
       run: |
-        python -m pip install --upgrade pip
-        pip install yfinance pandas twstock
-
-    - name: Refresh full symbol list (上市+上櫃+特別股+創新板)
-      run: python build_symbols.py
-
-    - name: Run fetch script
-      run: python fetch_yahoo_data.py
-
-    - name: Commit and Push changes
-      run: |
+        set -euo pipefail
+        mkdir -p data
+        # stage/listed/*.csv 與 stage/otc-*/ *.csv 都是已合併的完整 CSV,直接覆蓋
+        find stage -name '*.csv' -exec cp -f {} data/ \;
+        echo "新增/更新 CSV 數量: $(find data -name '*.csv' | wc -l)"
         git config --local user.email "actions@github.com"
         git config --local user.name "GitHub Action"
-        git add data/*.csv symbols.txt || echo "Nothing to add"
-        git commit -m "Auto-sync stock data: $(date +'%Y-%m-%d')" || echo "No changes to commit"
-        git push
+        git add data/ symbols.txt
+        if git diff --cached --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Auto-sync stock data: $(date +'%Y-%m-%d')"
+          git push
+        fi
