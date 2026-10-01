@@ -57,11 +57,11 @@ jobs:
   otc:
     needs: prep
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 600   # 881 檔全量回填量大,給足時間(部分未完成下次補)
     strategy:
       fail-fast: false
       matrix:
-        chunk: ${{ fromJson(needs.prep.outputs.otc) }}
+        spec: ${{ fromJson(needs.prep.outputs.otc) }}
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-python@v5
@@ -70,14 +70,14 @@ jobs:
     - run: |
         pip install --upgrade pip
         pip install pandas requests twstock
-    - name: Fetch OTC (TPEx) chunk ${{ matrix.idx }} from official source
+    - name: Fetch OTC (TPEx) chunk ${{ matrix.spec.i }} from official source
       run: |
         python build_symbols.py
-        python fetch_tpex_data.py --symbols "${{ matrix.chunk }}" --data data --outdir out
+        python fetch_tpex_data.py --symbols "${{ matrix.spec.s }}" --data data --outdir out
     - name: Upload OTC chunk CSVs
       uses: actions/upload-artifact@v4
       with:
-        name: otc-${{ matrix.idx }}
+        name: otc-${{ matrix.spec.i }}
         path: out
         if-no-files-found: ignore
 
@@ -93,15 +93,14 @@ jobs:
     - uses: actions/checkout@v4
     - name: Download all fetched CSVs
       uses: actions/download-artifact@v4
-      continue-on-error: true   # 極端全失敗時 pattern 無匹配也不該擋 commit
+      continue-on-error: true   # 極端全失敗(無 artifact)也不該擋 commit
       with:
-        pattern: 'listed|otc-*'
-        path: stage
+        path: stage             # 不設 pattern → 抓全部 artifact,名稱碰撞/字串匹配都不會漏
     - name: Assemble data/ and commit
       run: |
         set -euo pipefail
-        mkdir -p data
-        # stage/listed/*.csv 與 stage/otc-*/ *.csv 都是已合併的完整 CSV,直接覆蓋
+        mkdir -p data stage     # stage 預建,避免無 artifact 時 find 找不到目錄而中斷
+        # stage/<artifact>/*.csv 都是已合併的完整 CSV,直接覆蓋進 data/
         find stage -name '*.csv' -exec cp -f {} data/ \;
         echo "新增/更新 CSV 數量: $(find data -name '*.csv' | wc -l)"
         git config --local user.email "actions@github.com"
