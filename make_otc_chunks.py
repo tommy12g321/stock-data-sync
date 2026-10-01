@@ -41,7 +41,7 @@ def main():
 
     otc = sorted(load_otc(args.symbols))
     n = max(1, args.n)
-    # 均分:前 (len%n) 塊多一檔
+    # 均分:前 (len%n) 塊多一檔;輸出 [{i, s}, ...] 讓 matrix 有唯一 index 可做 artifact 名
     chunks = []
     base, extra = divmod(len(otc), n)
     i = 0
@@ -51,7 +51,7 @@ def main():
             break
         chunk = otc[i : i + size]
         i += size
-        chunks.append(",".join(chunk))
+        chunks.append({"i": k, "s": ",".join(chunk)})
 
     import sys
     print(f"OTC 共 {len(otc)} 檔 -> {len(chunks)} 塊(每塊約 {len(otc)//max(1,n)} 檔)", file=sys.stderr)
