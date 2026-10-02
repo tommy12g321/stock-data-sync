@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""Split the OTC (上櫃 / TPEx) symbols in symbols.txt into balanced chunks.
+"""Split the OTC (上櫃 / TPEx) symbols that still need backfill into balanced chunks.
 
-Outputs a JSON array of N strings to stdout, each string being a
-comma-separated list of OTC symbols — ready to feed a GitHub Actions matrix:
-  ["1240,1101,1301", "2401,2413", ...]
+Outputs a JSON array of {i, s} objects to stdout:
+  i = chunk index (so each matrix job gets a unique artifact name otc-<i>)
+  s = comma-separated symbol list for that chunk
 
-Routing uses twstock's official code database (data_source == 'tpex'), which is
-the authoritative split between 上市(TWSE) and 上櫃(TPEx) — not the code prefix.
+Only OTC stocks that do NOT yet have a data/<CODE>_TW.csv are emitted. The
+per-stock TPEx fetch is all-or-nothing (the file is written only after all
+months succeed), so "no file" is exactly "needs backfill" — no content check
+needed. Capped at --max per run so each chunk finishes well inside the
+~6h job-time cap (the shared TPEx throughput bounds total wall-clock, not
+parallelism), and the full 881-stock backfill converges over a couple of runs.
+Routing uses twstock's official code database (data_source == 'tpex'), the
+authoritative 上市/上櫃 split — not the code prefix.
 """
 import argparse
 import json
 import os
+import sys
 
 import twstock
 
@@ -34,27 +41,34 @@ def load_otc(path):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Split OTC symbols into balanced chunks")
+    ap = argparse.ArgumentParser(description="Chunk OTC symbols that still need backfill")
     ap.add_argument("--symbols", default=os.path.join(BASE_DIR, "symbols.txt"))
+    ap.add_argument("--data", default=os.path.join(BASE_DIR, "data"))
     ap.add_argument("--n", type=int, default=12, help="chunk 數量")
+    ap.add_argument("--max", type=int, default=480, help="單 run 最多回補幾檔(0=不限)")
     args = ap.parse_args()
 
-    otc = sorted(load_otc(args.symbols))
+    # 只挑「還沒檔」的上櫃股;抓到的 chunk 檔是全量(atomic),有檔=已回補完
+    todo = [
+        sym for sym in sorted(load_otc(args.symbols))
+        if not os.path.exists(os.path.join(args.data,
+                                           (sym[:-3] if sym.endswith(".TW") else sym) + "_TW.csv"))
+    ]
+    if args.max and len(todo) > args.max:
+        todo = todo[: args.max]
+
     n = max(1, args.n)
-    # 均分:前 (len%n) 塊多一檔;輸出 [{i, s}, ...] 讓 matrix 有唯一 index 可做 artifact 名
-    chunks = []
-    base, extra = divmod(len(otc), n)
-    i = 0
+    base, extra = divmod(len(todo), n)
+    chunks, i = [], 0
     for k in range(n):
         size = base + (1 if k < extra else 0)
         if size == 0:
             break
-        chunk = otc[i : i + size]
+        chunk = todo[i : i + size]
         i += size
         chunks.append({"i": k, "s": ",".join(chunk)})
 
-    import sys
-    print(f"OTC 共 {len(otc)} 檔 -> {len(chunks)} 塊(每塊約 {len(otc)//max(1,n)} 檔)", file=sys.stderr)
+    print(f"OTC 待回補 {len(todo)} 檔 -> {len(chunks)} 塊(每塊約 {len(todo)//max(1,n)} 檔)", file=sys.stderr)
     print(json.dumps(chunks))
 
 
