@@ -28,7 +28,8 @@ jobs:
       id: otc
       run: |
         python build_symbols.py
-        python make_otc_chunks.py --n 12 > otc_chunks.json
+        # 只挑「還沒檔」的上櫃股,單 run 限 480 檔(≈3.25h,穩壓在 6h job cap 內)→ 全量分 2 次收斂
+        python make_otc_chunks.py --n 12 --max 480 --data data > otc_chunks.json
         echo "otc=$(cat otc_chunks.json)" >> "$GITHUB_OUTPUT"
 
   listed:
@@ -56,8 +57,10 @@ jobs:
 
   otc:
     needs: prep
+    # 上櫃全回補完(無待補檔)→ 空 matrix,直接跳過
+    if: ${{ needs.prep.outputs.otc != '[]' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 600   # 881 檔全量回填量大,給足時間(部分未完成下次補)
+    timeout-minutes: 600   # 實際 job cap 6h;單 run 限 480 檔(≈3.25h)壓在 cap 內
     strategy:
       fail-fast: false
       matrix:
