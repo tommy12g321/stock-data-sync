@@ -105,9 +105,13 @@ jobs:
         mkdir -p data stage     # stage 預建,避免無 artifact 時 find 找不到目錄而中斷
         # stage/<artifact>/*.csv 都是已合併的完整 CSV,直接覆蓋進 data/
         find stage -name '*.csv' -exec cp -f {} data/ \;
-        echo "新增/更新 CSV 數量: $(find data -name '*.csv' | wc -l)"
+        echo "CSV 數量: $(find data -name '*.csv' | wc -l)"
         git config --local user.email "actions@github.com"
         git config --local user.name "GitHub Action"
+        # 以「最新 main」為基準提交:並發 push(手動改檔/其他排程 run)不會造成 non-fast-forward;
+        # data 是完整快照、覆寫幂等,reset --soft 換基準不丟資料
+        git fetch origin main
+        git reset --soft origin/main
         git add data/ symbols.txt
         if git diff --cached --quiet; then
           echo "No changes to commit"
