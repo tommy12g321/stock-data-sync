@@ -55,6 +55,25 @@ jobs:
         path: out
         if-no-files-found: ignore
 
+  index:
+    # ^TWII 加權指數(單一符號、一次請求,與個股 job 平行)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - run: pip install yfinance pandas
+    - name: Fetch ^TWII weighted index via Yahoo
+      run: python fetch_index.py --outdir out
+    - name: Upload index CSV
+      uses: actions/upload-artifact@v4
+      with:
+        name: index
+        path: out
+        if-no-files-found: ignore
+
   otc:
     needs: prep
     # 上櫃全回補完(無待補檔)→ 空 matrix,直接跳過
@@ -85,7 +104,7 @@ jobs:
         if-no-files-found: ignore
 
   commit:
-    needs: [listed, otc]
+    needs: [listed, otc, index]
     # 部分 chunk 失敗不能擋住提交:只要沒被 cancel,就 commit 所有已抓到的(成功 chunk 的 artifact 仍在)
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
